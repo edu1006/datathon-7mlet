@@ -1,0 +1,2 @@
+# Dependências entram no ciclo 2 (EDA, Epsilon-Greedy, FastAPI, MLflow).
+# Este repositório, neste momento, entrega só a arquitetura no README.
