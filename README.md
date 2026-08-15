@@ -19,7 +19,7 @@ datathon-7mlet/
 
 Uma mesa de campanha precisa escolher **como contactar** o cliente elegível para oferecer depósito a prazo: **celular (móvel)** ou **telefone fixo**.
 
-Na base UCI a coluna se chama `contact` e os valores estão em inglês: `cellular` e `telephone`. **Não são a mesma coisa.** O dicionário oficial diz *contact communication type*: `cellular` = chamada para o **número móvel**; `telephone` = chamada para a **linha fixa**. Em pt-BR não existe a palavra “cellular”; o rótulo da demo é **Celular (móvel)** vs **Telefone fixo**. Na base full as taxas também diferem (14,7% vs 5,2%) — canais operacionais distintos, não sinônimos.
+Na base UCI a coluna se chama `contact` e os valores estão em inglês: `cellular` e `telephone`. **Não são a mesma coisa.** O dicionário oficial diz *contact communication type*: `cellular` = chamada para o **número móvel**; `telephone` = chamada para a **linha fixa**. Em pt-BR não existe a palavra “cellular”; o rótulo da interface é **Celular (móvel)** vs **Telefone fixo**. Na base full as taxas também diferem (14,7% vs 5,2%) — canais operacionais distintos, não sinônimos.
 
 A base não é um banco digital nem um app. É o registro histórico de telemarketing de um banco português ([Moro et al., 2014](https://archive.ics.uci.edu/dataset/222/bank+marketing)), publicado no Kaggle como [henriqueyamahata/bank-marketing](https://www.kaggle.com/datasets/henriqueyamahata/bank-marketing). O `y` já aconteceu: o cliente assinou ou não. Não simulamos conversão.
 
@@ -33,7 +33,7 @@ A base não é um banco digital nem um app. É o registro histórico de telemark
 
 Epsilon-Greedy neste MVP **não é contextual**: a escolha usa só as médias dos braços e `ε`. As features do cliente existem para o Golden Set e para recusar vazamento (`duration`), não para perfilar.
 
-## Como apresentar (demo ao vivo)
+## Como executar
 
 ```bash
 python3 -m venv .venv
@@ -44,9 +44,9 @@ make demo
 make ui
 ```
 
-Tela da banca: Streamlit. Backup: `make api` → [http://localhost:8000/docs](http://localhost:8000/docs).
+Interface: `streamlit run demo/app.py`. API: `make api` → [http://localhost:8000/docs](http://localhost:8000/docs).
 
-## Resultados sólidos (fixture real, n=1200)
+## Resultados (fixture, n=1200)
 
 Recorte cronológico **linhas 11600:12800** de `bank-additional-full.csv` (arquivo em `tests/fixtures/bank_sample.csv`). `duration` entra no bruto e é dropado no prep.
 
@@ -64,21 +64,19 @@ Replay (recompensa = `y` da linha **só** se o braço escolhido = `contact` loga
 | Baseline sempre telefone fixo | **3.35%** | 806 | 0% |
 | Epsilon-Greedy ε=0.1, seed=42 | **3.90%** | 924 | 4.98% |
 
-A conversão do baseline **é** a taxa empírica de telefone fixo (identidade do replay; coberta por teste). Neste recorte o Epsilon-Greedy ficou acima do baseline (**+0,55 p.p.**). O ganho é pequeno no recorte da demo (início da série, taxas baixas). Na base full (41.188 linhas) o celular converte **14,7%** e o fixo **5,2%** — aí a diferença de canal é o argumento de negócio. Não misturar os dois números na fala.
-
-`pytest -q` / `make test`: **17 passed**.
+A conversão do baseline coincide com a taxa empírica de telefone fixo neste recorte (identidade do replay, coberta por teste). O Epsilon-Greedy ficou em **3,90%** contra **3,35%** (**+0,55 p.p.**). O recorte é o início da introdução do celular na série, com taxas absolutas baixas. Na base completa (41.188 linhas) o celular converte **14,7%** e o fixo **5,2%**; são recortes distintos e não devem ser somados.
 
 ## Golden Set (5 linhas reais da fixture)
 
-Índices no recorte `bank_sample.csv`. Oferta = braço da política já treinada no replay (seed=0 na demo: exploit de `cellular`, a melhor média aprendida).
+Cinco linhas do recorte `bank_sample.csv`. A oferta é o braço da política após o replay (`seed=0`: exploit de `cellular`, maior média aprendida).
 
-| idx | age | job | contact logado | month | campaign | y histórico | oferta | modo | Fez sentido? |
-|-----|-----|-----|----------------|-------|----------|-------------|--------|------|----------------|
-| 0 | 28 | admin. | telephone | jun | 14 | 0 | cellular | exploit | Sim: média de cellular > telephone no replay. Campanha=14 é candidata a HITL (muitos contatos). |
-| 90 | 43 | admin. | telephone | jun | 3 | 1 | cellular | exploit | Sim na política; o log foi telephone e converteu — replay não inventa o contrafactual. |
-| 784 | 52 | management | cellular | jul | 3 | 1 | cellular | exploit | Sim: coincide com o canal que converteu. |
-| 757 | 45 | blue-collar | cellular | jul | 1 | 0 | cellular | exploit | Coerente com a média; y=0 é o fato da linha, não um erro da política. |
-| 766 | 30 | admin. | cellular | jul | 6 | 0 | cellular | exploit | Idem; campaign=6 documenta contato repetido. |
+| idx | age | job | contact logado | month | campaign | y histórico | oferta | modo | Interpretação |
+|-----|-----|-----|----------------|-------|----------|-------------|--------|------|---------------|
+| 0 | 28 | admin. | telephone | jun | 14 | 0 | cellular | exploit | Média de cellular > telephone no replay. `campaign=14` é candidata a HITL. |
+| 90 | 43 | admin. | telephone | jun | 3 | 1 | cellular | exploit | A política escolhe cellular; o log foi telephone e converteu. Replay não inventa o contrafactual. |
+| 784 | 52 | management | cellular | jul | 3 | 1 | cellular | exploit | Coincide com o canal que converteu. |
+| 757 | 45 | blue-collar | cellular | jul | 1 | 0 | cellular | exploit | Coerente com a média; `y=0` é o fato da linha, não um erro da política. |
+| 766 | 30 | admin. | cellular | jul | 6 | 0 | cellular | exploit | Idem; `campaign=6` documenta contato repetido. |
 
 ## Como testar
 
@@ -88,7 +86,7 @@ pytest -m unit
 pytest -m e2e
 ```
 
-A suíte E2E carrega a fixture → drop `duration` → replay → `/health` + `/recommend`. Payload com `duration` retorna **422**. Não há assert “EG tem que ganhar”.
+A suíte (17 testes) cobre prep, políticas, replay e o fluxo E2E até `/health` e `/recommend`. Payload com `duration` retorna **422**. Os testes não exigem que o Epsilon-Greedy supere o baseline.
 
 Notebook: `notebooks/01_eda_bandit.ipynb` (EDA, gráfico, MLflow experiment `datathon-7mlet`).
 
@@ -96,7 +94,7 @@ Notebook: `notebooks/01_eda_bandit.ipynb` (EDA, gráfico, MLflow experiment `dat
 
 ## Arquitetura (TOGAF ADM enxuto)
 
-A narrativa **começa na arquitetura de negócio (Fase B)**. Este README é o contrato único. Os diagramas abaixo são a vista para a banca: negócio → dados → aplicação → tecnologia.
+A narrativa começa na arquitetura de negócio (Fase B). Os diagramas seguem o ADM enxuto: negócio → dados → aplicação → tecnologia.
 
 ```mermaid
 flowchart LR
@@ -111,7 +109,7 @@ flowchart LR
   B --> Cdata --> Capp --> D --> E --> F --> G --> H
 ```
 
-### Vista 1 — Motivação (Fase A / B)
+### Motivação (Fase A / B)
 
 ```mermaid
 flowchart TB
@@ -126,7 +124,7 @@ flowchart TB
   goal --> dec
 ```
 
-### Vista 2 — Camadas TOGAF (negócio / aplicação / tecnologia)
+### Camadas TOGAF (negócio / aplicação / tecnologia)
 
 ```mermaid
 flowchart TB
@@ -169,7 +167,7 @@ flowchart TB
   uiApp --> localUi
 ```
 
-### Vista 3 — Capabilities de negócio
+### Capabilities de negócio
 
 ```mermaid
 flowchart LR
@@ -207,7 +205,7 @@ flowchart LR
 
 **Motor:** regra fixa de canal não aprende com conversões observadas. **Meta:** conversão replay com exploração controlada, comparada à regra “sempre telephone”. **Restrição:** demonstração MLE, não operação de banco.
 
-**Atores:** marketing (catálogo de braços), canal de contato (executa a ligação), risco/HITL, MLE, banca.
+**Atores:** marketing (catálogo de canais), operação de contato, risco/compliance (HITL), engenharia de ML.
 
 **Value stream**
 
@@ -325,17 +323,11 @@ flowchart TB
 
 ## Fases E–H
 
-Etapas 0–7 do PDF estão neste repo. Etapa 8 (vídeo) = gravar Streamlit + `/docs`. Fora do MVP: Thompson Sampling, contextual, Terraform.
+As etapas 0–7 do Datathon estão neste repositório. Fora do escopo: Thompson Sampling, política contextual e provisionamento AWS.
 
-Governança: README + pytest + Golden Set de linhas reais. HITL só documentado (ex.: idx 0, `campaign=14`). Cada troca de `ε` é novo run MLflow.
+Governança: este README, pytest e o Golden Set de linhas reais. HITL é apenas documentado (ex.: idx 0, `campaign=14`). Troca de `ε` ou de catálogo de canais gera um novo run no MLflow.
 
----
-
-### Vista 4 — Tecnologia: baseline local vs alvo AWS
-
-O diagrama da Fase D (acima) é a vista de *baseline* (o que roda hoje) versus *target* (Etapa 6, não provisionado).
-
-Na apresentação: abra este README no GitHub ou no preview Markdown e percorra **Vista 1 → 2 → 3 → dados → aplicação → D**. Não leia TOGAF em voz alta; diga “negócio, depois o sistema, depois onde roda”.
+O diagrama da Fase D é a vista *baseline* (execução local) versus *target* (Etapa 6, não provisionada).
 
 ## Limitações honestas
 
