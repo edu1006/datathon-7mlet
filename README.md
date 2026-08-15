@@ -1,36 +1,102 @@
-# Datathon 7MLET — experimentação adaptativa de ofertas
+# Datathon 7MLET — canal de contato para depósito a prazo
 
-Plataforma didática de **Machine Learning Engineering** para decidir, em canal digital, qual oferta, mensagem ou próximo passo apresentar a um cliente elegível. Regras fixas e testes A/B longos desperdiçam tráfego; a política **Epsilon-Greedy** equilibra explotação (usar o que já converte) e exploração (testar o outro braço de propósito).
+## Estrutura local
 
-Este repositório **não reproduz um banco real**. Demonstra o ciclo ponta a ponta pedido no Datathon FIAP Pós Tech MLET (Fase 05): formular o problema, baseline, política adaptativa, avaliação, governança e explicação para negócio e técnica.
+```
+datathon-7mlet/
+├── README.md
+├── Makefile                    # make test | demo | ui | api
+├── src/                        # dados, políticas, replay, API
+├── demo/app.py                 # tela Streamlit
+├── scripts/demo.py             # taxas + Golden Set no terminal
+├── notebooks/01_eda_bandit.ipynb
+├── tests/                      # unit + e2e + fixture real
+├── data/                       # base full (gitignored)
+└── artifacts/                  # estado do replay (gitignored)
+```
 
-**Estado atual:** arquitetura TOGAF (ADM enxuto) consolidada neste README. Código de EDA, Epsilon-Greedy, API e MLflow entra no ciclo seguinte.
+## Caso de uso
 
-| Item | Valor |
-|------|--------|
-| Política primária | Epsilon-Greedy |
-| Baseline | Melhor braço histórico (determinístico) |
-| Recompensa | Conversão (`y` = assinatura de depósito a prazo) |
-| Dados | [bank-marketing (henriqueyamahata)](https://www.kaggle.com/datasets/henriqueyamahata/bank-marketing) |
-| Nuvem-alvo | AWS (texto da Etapa 6 abaixo) |
+Uma mesa de campanha precisa escolher **como contactar** o cliente elegível para oferecer depósito a prazo: **celular (móvel)** ou **telefone fixo**.
 
-## Como executar
+Na base UCI a coluna se chama `contact` e os valores estão em inglês: `cellular` e `telephone`. **Não são a mesma coisa.** O dicionário oficial diz *contact communication type*: `cellular` = chamada para o **número móvel**; `telephone` = chamada para a **linha fixa**. Em pt-BR não existe a palavra “cellular”; o rótulo da demo é **Celular (móvel)** vs **Telefone fixo**. Na base full as taxas também diferem (14,7% vs 5,2%) — canais operacionais distintos, não sinônimos.
 
-Ainda não há pipeline executável. Quando o ciclo 2 existir:
+A base não é um banco digital nem um app. É o registro histórico de telemarketing de um banco português ([Moro et al., 2014](https://archive.ics.uci.edu/dataset/222/bank+marketing)), publicado no Kaggle como [henriqueyamahata/bank-marketing](https://www.kaggle.com/datasets/henriqueyamahata/bank-marketing). O `y` já aconteceu: o cliente assinou ou não. Não simulamos conversão.
+
+| Peça | Fato |
+|------|------|
+| Decisão | braço `cellular` = celular móvel, ou `telephone` = telefone fixo |
+| Recompensa | `y` da linha (`yes`→1, `no`→0) |
+| Política antiga (baseline) | sempre `telephone` — regra única, não aprende |
+| Política nova | Epsilon-Greedy, `ε = 0.1` |
+| O que não é | core bancário, app, catálogo de produtos, dados brasileiros, PII |
+
+Epsilon-Greedy neste MVP **não é contextual**: a escolha usa só as médias dos braços e `ε`. As features do cliente existem para o Golden Set e para recusar vazamento (`duration`), não para perfilar.
+
+## Como apresentar (demo ao vivo)
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+make test
+make demo
+make ui
 ```
 
-Instruções de notebook, MLflow e `POST /recommend` serão acrescentadas neste mesmo arquivo.
+Tela da banca: Streamlit. Backup: `make api` → [http://localhost:8000/docs](http://localhost:8000/docs).
+
+## Resultados sólidos (fixture real, n=1200)
+
+Recorte cronológico **linhas 11600:12800** de `bank-additional-full.csv` (arquivo em `tests/fixtures/bank_sample.csv`). `duration` entra no bruto e é dropado no prep.
+
+Taxas empíricas da tabela (não são simuladas):
+
+| contact (UCI) | Canal em pt-BR | conversão | n | conversões |
+|---------------|----------------|-----------|---|------------|
+| cellular | Celular (móvel) | 5.33% | 394 | 21 |
+| telephone | Telefone fixo | 3.35% | 806 | 27 |
+
+Replay (recompensa = `y` da linha **só** se o braço escolhido = `contact` logado):
+
+| política | conversão replay | n aceito | exploração |
+|----------|------------------|----------|------------|
+| Baseline sempre telefone fixo | **3.35%** | 806 | 0% |
+| Epsilon-Greedy ε=0.1, seed=42 | **3.90%** | 924 | 4.98% |
+
+A conversão do baseline **é** a taxa empírica de telefone fixo (identidade do replay; coberta por teste). Neste recorte o Epsilon-Greedy ficou acima do baseline (**+0,55 p.p.**). O ganho é pequeno no recorte da demo (início da série, taxas baixas). Na base full (41.188 linhas) o celular converte **14,7%** e o fixo **5,2%** — aí a diferença de canal é o argumento de negócio. Não misturar os dois números na fala.
+
+`pytest -q` / `make test`: **17 passed**.
+
+## Golden Set (5 linhas reais da fixture)
+
+Índices no recorte `bank_sample.csv`. Oferta = braço da política já treinada no replay (seed=0 na demo: exploit de `cellular`, a melhor média aprendida).
+
+| idx | age | job | contact logado | month | campaign | y histórico | oferta | modo | Fez sentido? |
+|-----|-----|-----|----------------|-------|----------|-------------|--------|------|----------------|
+| 0 | 28 | admin. | telephone | jun | 14 | 0 | cellular | exploit | Sim: média de cellular > telephone no replay. Campanha=14 é candidata a HITL (muitos contatos). |
+| 90 | 43 | admin. | telephone | jun | 3 | 1 | cellular | exploit | Sim na política; o log foi telephone e converteu — replay não inventa o contrafactual. |
+| 784 | 52 | management | cellular | jul | 3 | 1 | cellular | exploit | Sim: coincide com o canal que converteu. |
+| 757 | 45 | blue-collar | cellular | jul | 1 | 0 | cellular | exploit | Coerente com a média; y=0 é o fato da linha, não um erro da política. |
+| 766 | 30 | admin. | cellular | jul | 6 | 0 | cellular | exploit | Idem; campaign=6 documenta contato repetido. |
+
+## Como testar
+
+```bash
+make test
+pytest -m unit
+pytest -m e2e
+```
+
+A suíte E2E carrega a fixture → drop `duration` → replay → `/health` + `/recommend`. Payload com `duration` retorna **422**. Não há assert “EG tem que ganhar”.
+
+Notebook: `notebooks/01_eda_bandit.ipynb` (EDA, gráfico, MLflow experiment `datathon-7mlet`).
 
 ---
 
 ## Arquitetura (TOGAF ADM enxuto)
 
-A narrativa **começa na arquitetura de negócio (Fase B)**. Preliminary e A são âncora. Não há pacote solto de governança: este README é o contrato único.
+A narrativa **começa na arquitetura de negócio (Fase B)**. Este README é o contrato único. Os diagramas abaixo são a vista para a banca: negócio → dados → aplicação → tecnologia.
 
 ```mermaid
 flowchart LR
@@ -45,86 +111,114 @@ flowchart LR
   B --> Cdata --> Capp --> D --> E --> F --> G --> H
 ```
 
-### Preliminary e Fase A — âncora
+### Vista 1 — Motivação (Fase A / B)
 
-**Princípios**
+```mermaid
+flowchart TB
+  driver[Motor: regra_fixa_nao_aprende]
+  goal[Meta: conversao_com_exploracao]
+  constr[Restricao: so_Kaggle_sem_PII]
+  princ[Principio: drop_duration]
+  dec[Decisao: EpsilonGreedy_vs_sempre_fixo]
+  driver --> goal
+  constr --> dec
+  princ --> dec
+  goal --> dec
+```
 
-1. Só dados públicos Kaggle; nenhum cliente real, identificador, patrimônio, renda, gênero ou raça.
-2. Minimização: usar o mínimo de colunas para decidir o braço.
-3. Humano no loop para decisão sensível (crédito, recusa, tratamento desigual).
-4. Simplicidade do pipeline básico — o PDF pede funcionamento, não um core bancário.
-5. Um único artefato de documentação: este README.
+### Vista 2 — Camadas TOGAF (negócio / aplicação / tecnologia)
 
-**Visão:** dado um cliente elegível e o contexto do canal, a plataforma escolhe um braço (ação de campanha), observa conversão e atualiza a média empírica daquele braço, em vez de congelar a decisão numa regra estática.
+```mermaid
+flowchart TB
+  subgraph negocio [Camada_Negocio]
+    ator[MesaDeCampanha]
+    cap[Capability_DecidirCanal]
+    vs[ValueStream_Ligar_Observar_Aprender]
+    kpi[KPI_ConversaoVsBaseline]
+    ator --> cap
+    cap --> vs
+    vs --> kpi
+  end
+  subgraph aplicacao [Camada_Aplicacao]
+    dataApp[Prep_sem_duration]
+    baseApp[Baseline_telefone_fixo]
+    egApp[EpsilonGreedy]
+    replayApp[Replay_y_real]
+    apiApp[FastAPI_recommend]
+    uiApp[Streamlit]
+    trackApp[MLflow]
+    dataApp --> replayApp
+    baseApp --> replayApp
+    egApp --> replayApp
+    replayApp --> apiApp
+    replayApp --> uiApp
+    replayApp --> trackApp
+  end
+  subgraph tecnologia [Camada_Tecnologia]
+    py[Python]
+    gitHub[GitHub]
+    localUi[localhost_8501]
+    localApi[localhost_8000]
+    alvo[Alvo_AWS_S3_Lambda_CloudWatch]
+    py --> localUi
+    py --> localApi
+    gitHub --> alvo
+  end
+  cap --> egApp
+  apiApp --> localApi
+  uiApp --> localUi
+```
 
-**Baseline vs alvo**
+### Vista 3 — Capabilities de negócio
 
-| Building block | Baseline (hoje, regra fixa) | Alvo (esta arquitetura) |
-|----------------|----------------------------|-------------------------|
-| Decisão | Sempre o mesmo produto / melhor histórico congelado | Epsilon-Greedy com `ε` explícito |
-| Aprendizado | Nenhum após o go-live | Média do braço atualiza a cada recompensa |
-| Evidência | Uma taxa histórica | Conversão acumulada vs baseline + fração exploratória |
-| Mudança de política | Novo A/B de semanas | Novo run (catálogo ou `ε`) com rastreio |
+```mermaid
+flowchart LR
+  cat[CatalogarCanais]
+  elig[AvaliarElegibilidade]
+  dec[DecidirProximoCanal]
+  obs[ObservarConversao]
+  cmp[CompararBaseline]
+  exp[ExplicarGoldenSet]
+  hitl[MarcarHITL]
+  cat --> dec
+  elig --> dec
+  dec --> obs
+  obs --> cmp
+  dec --> exp
+  dec --> hitl
+```
+
+### Preliminary e Fase A
+
+**Princípios:** só Kaggle/UCI; sem PII; drop `duration`; HITL documentado; pipeline simples; README único.
+
+**Visão:** escolher o canal de contato, observar o `y` real quando o braço coincide com o log, atualizar a média do braço.
+
+| Building block | Baseline | Alvo |
+|----------------|----------|------|
+| Decisão | Sempre telephone | Epsilon-Greedy `ε=0.1` |
+| Aprendizado | Nenhum | Média do braço no replay |
+| Evidência | Taxa histórica de telephone | Conversão replay vs baseline |
+| Mudança | Novo A/B | Novo run (`ε` ou catálogo) |
 
 ---
 
 ## Fase B — Arquitetura de negócio
 
-### Motivação
+**Motor:** regra fixa de canal não aprende com conversões observadas. **Meta:** conversão replay com exploração controlada, comparada à regra “sempre telephone”. **Restrição:** demonstração MLE, não operação de banco.
 
-- **Motor:** cada impressão em canal digital custa tráfego; regra fixa não reage a mudança de contexto; A/B clássico trava metade do tráfego numa variante perdedora por muito tempo.
-- **Meta:** aumentar **conversão acumulada com exploração controlada**, batendo um baseline determinístico.
-- **Restrição:** demonstração acadêmica de maturidade MLE (formular, baseline, avaliar, governar, explicar), não operação de um banco.
+**Atores:** marketing (catálogo de braços), canal de contato (executa a ligação), risco/HITL, MLE, banca.
 
-### Atores
-
-| Ator | Papel | O que espera da plataforma |
-|------|--------|----------------------------|
-| Marketing | Dono do catálogo de ofertas/braços | Ganho de conversão visível vs regra fixa |
-| Canal digital | Consome a decisão (app, site, contato) | Resposta rápida: qual próximo passo mostrar |
-| Risco / compliance | Elegibilidade e HITL | Decisões sensíveis não saem 100% automáticas |
-| MLE | Opera o ciclo | Experimento reproduzível, métricas, limites honestos |
-| Banca do Datathon | Avalia 30% negócio + 70% técnico | História clara em minutos + pipeline que roda |
-
-### Capabilities
-
-- Catalogar ofertas/braços
-- Avaliar elegibilidade
-- Decidir o próximo passo (política)
-- Observar recompensa (conversão)
-- Comparar com baseline
-- Explicar a decisão (Golden Set neste README)
-- Interromper / escalar a humano
-
-```mermaid
-flowchart TB
-  subgraph caps [Capabilities]
-    cat[CatalogarBracos]
-    elig[AvaliarElegibilidade]
-    dec[DecidirProximoPasso]
-    obs[ObservarRecompensa]
-    cmp[CompararBaseline]
-    exp[ExplicarDecisao]
-    hitlCap[EscalarHumano]
-  end
-  elig --> dec
-  cat --> dec
-  dec --> obs
-  obs --> cmp
-  dec --> exp
-  dec --> hitlCap
-```
-
-### Value stream
+**Value stream**
 
 ```mermaid
 flowchart LR
   elegivel[ClienteElegivel]
   contexto[ContextoDoCanal]
   politica[PoliticaAdaptativa]
-  oferta[OfertaOuProximoPasso]
+  oferta[CanalCellularOuTelephone]
   hitl[HumanoNoLoop]
-  resposta[ConversaoObservada]
+  resposta[ConversaoYDaLinha]
   aprendizado[AtualizaMediaDoBraco]
   elegivel --> contexto --> politica
   politica -->|"decisao_sensivel"| hitl
@@ -133,161 +227,84 @@ flowchart LR
   oferta --> resposta --> aprendizado --> politica
 ```
 
-Fluxo em linguagem de negócio: o canal entrega um cliente elegível; a política escolhe um braço (na maior parte do tempo o de melhor média; em `ε`% sorteia outro); se a ação for sensível, um humano confirma; o cliente responde (converte ou não); a média daquele braço é atualizada.
-
-### KPIs de negócio (os 30% da banca)
-
-| KPI | Pergunta que responde |
-|-----|------------------------|
-| Conversão acumulada vs baseline | A política adaptativa ganhou da regra fixa? |
-| Fração de tráfego exploratório | Estamos realmente explorando, ou só explotando? |
-| Regret vs melhor braço *a posteriori* | Quanto conversão perdemos por explorar? |
-| % de decisões que exigiriam HITL | Onde o automático deve parar? (documentado, não implementado de verdade) |
-
-### Catálogo de braços (decisão de negócio)
-
-A base Kaggle **não é um catálogo de produtos**. Tem target `y` (assinou depósito a prazo?) e canal `contact` (`cellular` / `telephone`). Os **braços são ações de campanha**, não SKUs bancários.
-
-| Braço | Ação de negócio | Origem na base |
-|-------|-----------------|----------------|
-| `cellular` | Contactar por celular | coluna `contact` |
-| `telephone` | Contactar por telefone fixo | coluna `contact` |
-
-Recompensa = `y` (`yes` → 1, `no` → 0). Outras ações (mês, intensidade de `campaign`, “não contactar agora”) ficam no estado-alvo, não no MVP.
-
-### Decisão de política — a mais didática
-
-Critério: a banca precisa entender exploração vs explotação em poucos minutos.
-
-**Epsilon-Greedy (escolhido).** Duas frases: na maior parte do tempo use o braço com melhor conversão média; em `ε`% do tempo sorteie outro, de propósito. Um parâmetro. No Golden Set cada caso marca `explotou` ou `explorou`. Limitação honesta: a exploração é aleatória (pode gastar tráfego num braço já ruim) e `ε` não some sozinho — decay é opcional depois.
-
-**Por que não as outras agora**
-
-| Família | Por que não é o MVP |
-|---------|---------------------|
-| UCB | Melhor estatisticamente (explora o incerto), mas a demo vira intervalo de confiança. |
-| Thompson Sampling | O PDF lista primeiro; priors e posterior atrasam o pitch de 5 min. |
-| Contextual | Mais perto de personalização real; menos didático para o pipeline básico. |
-
-Thompson Sampling e contextual entram só como **arquitetura-alvo** (Fases E e H).
-
 ---
 
-## Fase C — Arquitetura de dados
-
-### Fonte, versão, licença
+## Fase C — Dados
 
 | Campo | Valor |
 |-------|--------|
 | Kaggle | [henriqueyamahata/bank-marketing](https://www.kaggle.com/datasets/henriqueyamahata/bank-marketing) |
-| Origem | UCI Bank Marketing, campanhas de telemarketing de um banco português ([Moro et al., 2014](https://archive.ics.uci.edu/dataset/222/bank+marketing)) |
-| Recorte | `bank-additional-full.csv` — 41.188 linhas, 20 inputs + `y` |
-| Licença | Creative Commons Attribution 4.0 (CC BY 4.0) — citar a fonte |
-| Target | `y` — o cliente assinou depósito a prazo? (`yes` / `no`) |
+| Origem | UCI Bank Marketing, `bank-additional-full.csv` (41.188 × 21), CC BY 4.0 |
+| Fixture | `tests/fixtures/bank_sample.csv` — linhas 11600:12800, n=1200 |
+| Target | `y` |
+| Vazamento | **drop `duration`** |
 
-### Colunas e tratamento
-
-Usar como contexto de campanha (sem vazamento): `contact`, `month`, `day_of_week`, `campaign`, `pdays`, `previous`, `poutcome`, indicadores macro (`emp.var.rate`, `cons.price.idx`, `cons.conf.idx`, `euribor3m`, `nr.employed`).
-
-Usar com ressalva (minimização, não perfilamento): `age`, `job`, `marital`, `education`. Não são gênero/raça/renda, mas `job` e `age` são proxies socioeconômicos — não entram como critério automático de recusa.
-
-**Descartar `duration`.** Duração da ligação só existe depois da chamada; se `duration = 0`, em geral `y = no`. É vazamento temporal. O PDF exige o descarte.
-
-Não usar: identificadores reais, patrimônio, renda, gênero, raça — a base pública já não traz esses campos; a regra permanece para qualquer coluna futura.
-
-### Entidades conceituais
+Braços fora de `{cellular, telephone}` (se existirem no full) ficam de fora do catálogo de decisão.
 
 ```mermaid
 flowchart LR
+  fonte[Kaggle_UCI]
+  raw[LinhaCampanha]
+  prep[Prepare_drop_duration]
   cliente[ClienteElegivel]
-  braco[Braco]
+  braco[Canal_celular_ou_fixo]
   decisao[Decisao]
-  recompensa[Recompensa]
-  expRun[Experimento]
+  y[Recompensa_y]
   golden[GoldenCase]
+  fonte --> raw --> prep --> cliente
+  prep --> braco
   cliente --> decisao
   braco --> decisao
-  decisao --> recompensa
-  expRun --> decisao
-  golden --> cliente
-  golden --> braco
+  decisao --> y
+  cliente --> golden
 ```
-
-| Entidade | O que é |
-|----------|---------|
-| ClienteElegivel | Features de campanha de uma linha Kaggle, sem `duration` |
-| Braco | Ação `cellular` ou `telephone` |
-| Decisao | Braço escolhido + flag `explorou` / `explotou` + `ε` |
-| Recompensa | Conversão observada (`y`) |
-| Experimento | Run futuro no MLflow (params: `ε`, catálogo; métricas: conversão vs baseline) |
-| GoldenCase | Um dos 5 perfis de sanidade de negócio |
-
-### Qualidade
-
-- Sem shuffle aleatório que misture tempo de campanha quando o recorte for temporal.
-- Sem `duration` em feature, treino ou serving.
-- Golden Set: cinco perfis especificados abaixo; recomendações preenchidas só quando a política existir.
-
-### Golden Set (especificação — ainda sem oferta gerada)
-
-Cinco clientes sintéticos no espírito da base, para a Etapa 4. A coluna “oferta” será preenchida pelo modelo no ciclo 2.
-
-| # | Perfil | Por que existe | Oferta | Fez sentido? |
-|---|--------|----------------|--------|----------------|
-| 1 | Contato celular, campanha prévia com `poutcome=success` | Explotação: histórico positivo | *a preencher* | *a preencher* |
-| 2 | Contato telefone, `poutcome=failure` | Exploração ou HITL: já falhou | *a preencher* | *a preencher* |
-| 3 | Celular, muitos contatos em `campaign` | Risco de fadiga; HITL documentado | *a preencher* | *a preencher* |
-| 4 | Telefone, `previous=0` | Cliente frio; exploração justificada | *a preencher* | *a preencher* |
-| 5 | Celular, `pdays=999` (nunca contactado antes) | Sem histórico do braço no indivíduo | *a preencher* | *a preencher* |
 
 ---
 
-## Fase C — Arquitetura de aplicação
+## Fase C — Aplicação (implementada)
 
-Building blocks lógicos. Pastas `src/`, notebook e API **ainda não existem**.
-
-| Bloco | Responsabilidade | Etapa do PDF |
-|-------|------------------|--------------|
-| Notebook EDA | Limpar base, drop `duration`, descrever braços | 1–2 |
-| PoliticaBaseline | Sempre o melhor braço histórico (ou sempre o mesmo) | 3 |
-| EpsilonGreedy | Com probabilidade `1-ε` o melhor médio; com `ε` sorteia | 3 |
-| ServicoRecommend | `POST /recommend` devolve braço + flag explorou/explotou | 5 |
-| MLflowTracking | Params (`ε`, braços) e métricas da Etapa 3 | 7 |
-| GoldenSet | Cinco casos neste README | 4 |
+```
+src/data.py policies.py replay.py serving.py state.py tracking.py
+notebooks/01_eda_bandit.ipynb
+demo/app.py
+scripts/demo.py
+tests/unit  tests/e2e  tests/fixtures/bank_sample.csv
+```
 
 ```mermaid
 flowchart LR
-  kaggle[KaggleBankMarketing]
+  csv[FixtureUCI]
   eda[NotebookEDA]
-  baseline[PoliticaBaseline]
+  base[BaselineTelephone]
   eg[EpsilonGreedy]
-  mlflow[MLflowTracking]
-  api[ServicoRecommend]
-  kaggle --> eda --> baseline
-  eda --> eg
-  baseline --> mlflow
-  eg --> mlflow
-  eg --> api
+  replay[Replay_y_real]
+  mlflow[MLflow]
+  api[FastAPI]
+  ui[Streamlit]
+  csv --> eda
+  csv --> replay
+  base --> replay
+  eg --> replay
+  replay --> mlflow
+  replay --> api
+  replay --> ui
 ```
 
-Contrato-alvo do serviço (não implementado): entrada = features do cliente sem `duration`; saída = `{ "arm": "cellular"|"telephone", "mode": "exploit"|"explore", "epsilon": 0.1 }`.
+`POST /recommend` devolve `{ arm, mode, epsilon, means }`. Extra `duration` → 422.
 
 ---
 
-## Fase D — Arquitetura de tecnologia
+## Fase D — Tecnologia
 
-### Agora (dev / demo local)
+**Agora:** Python 3.11+, pytest, FastAPI, Streamlit, MLflow local, GitHub.
 
-Python 3.11, Jupyter, GitHub. No ciclo 2: MLflow local, FastAPI + uvicorn.
-
-### Alvo em nuvem — AWS (Etapa 6)
-
-Para colocar o pipeline no ar, o grupo usaria **S3** como lago da base Kaggle versionada (prefixos `raw/` e `curated/`, sem `duration` na curated). O treino offline da política (contagem por braço, conversão, comparação com baseline) rodaria num job **SageMaker Processing** ou num container em **ECS**. O serviço `POST /recommend` ficaria atrás de **API Gateway** + **Lambda** (ou um serviço ECS se a demo precisar de processo longo). **CloudWatch** guardaria logs, latência e a fração de respostas `explore` vs `exploit`. O tracking de experimento, que no notebook é MLflow local, no alvo publicaria métricas no próprio MLflow self-hosted ou em parâmetros de um experimento SageMaker. Nenhum dado de cliente real entra nesses buckets.
+**Alvo AWS (Etapa 6, não provisionado):** S3 `raw/` + `curated/` (sem `duration`); treino/replay em SageMaker Processing ou ECS; `POST /recommend` em API Gateway + Lambda (ou ECS); CloudWatch (latência e fração `explore`/`exploit`). Nenhum cliente operacional nesses buckets.
 
 ```mermaid
 flowchart TB
   subgraph local [Baseline_local]
     nb[Jupyter]
+    ui2[Streamlit]
     mlf[MLflowLocal]
     fa[FastAPI]
   end
@@ -302,104 +319,28 @@ flowchart TB
   end
   nb -.-> s3
   fa -.-> rec
-  mlf -.-> job
 ```
 
 ---
 
-## Fases E e F — Oportunidades e migração
+## Fases E–H
 
-O que o PDF pede, em que ciclo entra, e qual fase ADM cobre.
+Etapas 0–7 do PDF estão neste repo. Etapa 8 (vídeo) = gravar Streamlit + `/docs`. Fora do MVP: Thompson Sampling, contextual, Terraform.
 
-| Etapa PDF | Conteúdo | Ciclo | Fase ADM |
-|-----------|----------|-------|----------|
-| 0 | Repo público, README, `requirements.txt` | **este** | Preliminary / G |
-| 1–2 | Link Kaggle, EDA, features + target | 2 | C dados |
-| 3 | Baseline vs Epsilon-Greedy, adaptativo ganhando | 2 | B + C aplicação |
-| 4 | Métricas + Golden Set preenchido | 2 | G |
-| 5 | Script, notebook ou FastAPI `/recommend` | 2 | C aplicação + D |
-| 6 | Parágrafo + diagrama AWS | **este** | D |
-| 7 | MLflow com params e métricas da Etapa 3 | 2 | G |
-| 8 | Vídeo ≤ 5 min | 3 | A (comunicação da visão) |
-
-**Oportunidade adiada (não MVP):** Thompson Sampling, política contextual, decay de `ε`, mais braços que canal de contato.
-
-```mermaid
-flowchart LR
-  c1[Ciclo1_Arquitetura]
-  c2[Ciclo2_Pipeline]
-  c3[Ciclo3_Video]
-  c1 --> c2 --> c3
-```
+Governança: README + pytest + Golden Set de linhas reais. HITL só documentado (ex.: idx 0, `campaign=14`). Cada troca de `ε` é novo run MLflow.
 
 ---
 
-## Fases G e H — Governança e mudança
+### Vista 4 — Tecnologia: baseline local vs alvo AWS
 
-### G — Implementation governance
+O diagrama da Fase D (acima) é a vista de *baseline* (o que roda hoje) versus *target* (Etapa 6, não provisionado).
 
-- Este README é o contrato. Sem `docs/` de governança paralela.
-- Golden Set = teste de sanidade de negócio (cinco linhas acima).
-- HITL: perfis 2 e 3 da tabela são os que a arquitetura marca como “humano deveria olhar”; o MVP acadêmico só documenta, não abre fila de aprovação.
-- Base legal / finalidade / retenção (Kaggle, não cliente real): finalidade = demonstração de política adaptativa; minimização = drop `duration` e sem atributos proibidos; retenção = artefatos de experimento no Git/MLflow do grupo, sem republicar a base.
-- MLflow (quando existir) é a evidência de que `ε`, catálogo e métricas vs baseline foram registrados.
-
-### H — Architecture change management
-
-O bandit **é** o mecanismo de mudança: cada recompensa atualiza a média empírica do braço; `ε` permanece explícito e auditável. Troca de catálogo de braços ou de valor de `ε` vira **novo run**, não um hotfix silencioso. Política contextual (features do cliente na escolha) só entra quando o MVP Epsilon-Greedy já tiver batido o baseline no notebook.
-
-### Requirements management
-
-Requisito raiz (PDF): política adaptativa superando baseline, com exploração visível, dados Kaggle, serving demonstrável e README único. Qualquer feature que não sirva a isso (portfólio, LSTM, dados reais) está fora.
-
----
-
-## Diagrama-mestre — camadas TOGAF
-
-```mermaid
-flowchart TB
-  subgraph business [Camada_Negocio]
-    mkt[Marketing]
-    canal[CanalDigital]
-    risco[RiscoHITL]
-    cap[DecidirProximoPasso]
-    kpi[ConversaoVsBaseline]
-    mkt --> cap
-    canal --> cap
-    cap --> risco
-    cap --> kpi
-  end
-  subgraph application [Camada_Aplicacao]
-    eda2[NotebookEDA]
-    base2[PoliticaBaseline]
-    eg2[EpsilonGreedy]
-    api2[ServicoRecommend]
-    mlf2[MLflow]
-    eda2 --> base2
-    eda2 --> eg2
-    eg2 --> api2
-    base2 --> mlf2
-    eg2 --> mlf2
-  end
-  subgraph technology [Camada_Tecnologia]
-    py[Python311]
-    gitHub[GitHub]
-    s3b[S3]
-    rec2[LambdaECS]
-    cw2[CloudWatch]
-    py --> gitHub
-    s3b --> rec2 --> cw2
-  end
-  cap --> eg2
-  api2 --> rec2
-```
-
----
+Na apresentação: abra este README no GitHub ou no preview Markdown e percorra **Vista 1 → 2 → 3 → dados → aplicação → D**. Não leia TOGAF em voz alta; diga “negócio, depois o sistema, depois onde roda”.
 
 ## Limitações honestas
 
-- Epsilon-Greedy explora de forma aleatória; não privilegia o braço incerto.
-- Dois braços de canal são um proxy de “oferta”, não um catálogo comercial.
-- Conversão na base é assinatura de depósito após contato telefônico — não é clique em app.
-- Sem dados reais; generalizar para um banco brasileiro exigiria nova base legal e HITL operacional.
-- Arquitetura-alvo AWS não está provisionada; é o mapa da Etapa 6.
+- Exploração do Epsilon-Greedy é aleatória; não privilegia o braço incerto.
+- Dois canais de ligação são um proxy de “oferta”, não um catálogo comercial.
+- `y` é assinatura de depósito após telemarketing (2008–2010), não clique em app.
+- Replay não diz o que teria acontecido no braço não logado.
+- AWS não está no ar. Sem clientes de um banco operacional — só base pública.

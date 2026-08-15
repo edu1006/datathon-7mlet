@@ -6,8 +6,10 @@ __pycache__/
 .ipynb_checkpoints/
 .mlflow/
 mlruns/
-data/
-artifacts/
+data/*
+!data/.gitkeep
+artifacts/*
+!artifacts/.gitkeep
 .DS_Store
 .env
 .idea/
